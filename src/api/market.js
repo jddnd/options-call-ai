@@ -11,12 +11,25 @@ export async function getPolygonCalls(symbol, limit = 200) {
   try { return JSON.parse(text); } catch { throw new Error('Invalid JSON from Polygon function'); }
 }
 
+export async function getPolygonQuotes(contracts) {
+  if (!contracts?.length) return { results: [] };
+  const url = `/.netlify/functions/polygon-quotes?contracts=${encodeURIComponent(contracts.join(','))}`;
+  const res = await fetch(url);
+  const text = await res.text();
+  if (!res.ok) {
+    let details;
+    try { details = JSON.parse(text); } catch { details = { body: text }; }
+    throw new Error(`Polygon quotes failed: ${details?.error || details?.body || res.status}`);
+  }
+  try { return JSON.parse(text); } catch { throw new Error('Invalid JSON from Polygon quotes function'); }
+}
+
 export async function getUWFlow(symbol) {
   const url = `/.netlify/functions/uw-flow?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url);
   const text = await res.text();
 
-  // If UW key is missing, just return empty flow so UI keeps working
+  // If UW key is missing, return empty so UI keeps working
   if (res.status === 500 && text.includes('Missing UW_API_KEY')) {
     return { data: [] };
   }
