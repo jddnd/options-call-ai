@@ -1,4 +1,4 @@
-// /netlify/functions/polygon-calls.js (patched)
+// /netlify/functions/polygon-calls.js (resilient with fallback)
 export const handler = async (event) => {
   try {
     const symbol = event.queryStringParameters?.symbol;
@@ -12,26 +12,52 @@ export const handler = async (event) => {
       return { statusCode: 500, body: JSON.stringify({ error: 'Missing POLYGON_API_KEY env var' }) };
     }
 
-    const url = new URL(`https://api.polygon.io/v3/snapshot/options/${encodeURIComponent(symbol.toUpperCase())}`);
-    url.searchParams.set('contract_type', 'call');
-    url.searchParams.set('limit', limit);
-    url.searchParams.set('apiKey', apiKey);
+    // 1) Try snapshot options (rich data: bid/ask/greeks/iv)
+    const snapURL = new URL(`https://api.polygon.io/v3/snapshot/options/${encodeURIComponent(symbol.toUpperCase())}`);
+    snapURL.searchParams.set('contract_type', 'call');
+    snapURL.searchParams.set('limit', limit);
+    snapURL.searchParams.set('apiKey', apiKey);
 
-    const res = await fetch(url.toString());
-    const text = await res.text();
+    const snapRes = await fetch(snapURL.toString());
+    const snapText = await snapRes.text();
 
-    if (!res.ok) {
+    if (snapRes.ok) {
       return {
-        statusCode: res.status,
+        statusCode: 200,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-        body: JSON.stringify({ error: 'Polygon API error', status: res.status, body: text })
+        body: snapText
       };
     }
 
+    // 2) Fallback: reference contracts list (broadly available)
+    const refURL = new URL('https://api.polygon.io/v3/reference/options/contracts');
+    refURL.searchParams.set('underlying_ticker', symbol.toUpperCase());
+    refURL.searchParams.set('contract_type', 'call');
+    refURL.searchParams.set('expired', 'false');
+    refURL.searchParams.set('limit', '200');
+    refURL.searchParams.set('apiKey', apiKey);
+
+    const refRes = await fetch(refURL.toString());
+    const refText = await refRes.text();
+
+    if (refRes.ok) {
+      // Wrap so the client knows this is the fallback shape
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({
+          mode: 'reference',
+          status: 'OK',
+          results: JSON.parse(refText)?.results || []
+        })
+      };
+    }
+
+    // If both fail, return the original snapshot error (more useful)
     return {
-      statusCode: 200,
+      statusCode: snapRes.status,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      body: text
+      body: JSON.stringify({ error: 'Polygon API error', status: snapRes.status, body: snapText })
     };
   } catch (e) {
     return { statusCode: 500, body: JSON.stringify({ error: e.message || String(e) }) };
