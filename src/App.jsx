@@ -151,7 +151,7 @@ export default function App() {
                   tags={c.tags}
                 />
               ))}
-              {!cards.length and (
+              {!cards.length && (
                 <div className="text-sm text-gray-400 p-4">
                   No calls found yet. Try another ticker or scan again.
                 </div>
