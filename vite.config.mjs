@@ -10,8 +10,6 @@ export default defineConfig({
     environment: 'jsdom',
   },
   server: {
-    allowedHosts: [
-      '16f99e92-2870-44e2-a457-becf0eaaa78b-00-2nvqxl1xu191c.kirk.replit.dev'
-    ],
+    host: true,
   },
 });
