@@ -6,13 +6,42 @@ import MarketSentiment from './components/MarketSentiment';
 import SkeletonLoader from './components/SkeletonLoader';
 import { getPolygonCalls, getUWFlow } from './api/market';
 
-function scoreCall({ iv, bid, ask }, flowHits) {
+// Scoring constants
+const IV_WEIGHT = 0.4;
+const SPREAD_WEIGHT = 0.3;
+const FLOW_WEIGHT = 0.3;
+const IV_MAX = 100;
+const IV_SCORE_DEFAULT = 7.5;
+const SPREAD_SCORE_DEFAULT = 8;
+const FLOW_SCORE_BASE = 7;
+const FLOW_HIT_MULTIPLIER = 0.6;
+const MAX_SCORE = 10;
+
+export function scoreCall({ iv, bid, ask }, flowHits) {
   const spread = (ask ?? 0) - (bid ?? 0);
-  const ivScore = iv ? Math.max(0, 10 - Math.min(100, iv) / 10) : 7.5; // lower IV = better
-  const spreadScore = spread > 0 ? Math.max(0, 10 - spread * 10) : 8;
-  const flowScore = Math.min(10, 7 + (flowHits || 0) * 0.6);
-  const s = (ivScore * 0.4) + (spreadScore * 0.3) + (flowScore * 0.3);
-  return s.toFixed(1);
+
+  // Lower IV is better
+  const ivScore = iv
+    ? Math.max(0, MAX_SCORE - Math.min(IV_MAX, iv) / 10)
+    : IV_SCORE_DEFAULT;
+
+  // Tighter spread is better
+  const spreadScore = spread > 0
+    ? Math.max(0, MAX_SCORE - spread * 10)
+    : SPREAD_SCORE_DEFAULT;
+
+  // More flow hits are better
+  const flowScore = Math.min(
+    MAX_SCORE,
+    FLOW_SCORE_BASE + (flowHits || 0) * FLOW_HIT_MULTIPLIER
+  );
+
+  const totalScore =
+    (ivScore * IV_WEIGHT) +
+    (spreadScore * SPREAD_WEIGHT) +
+    (flowScore * FLOW_WEIGHT);
+
+  return totalScore.toFixed(1);
 }
 
 export default function App() {
@@ -20,10 +49,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [cards, setCards] = useState([]);
   const [flowFeed, setFlowFeed] = useState([]);
+  const [error, setError] = useState(null);
 
   const fetchData = async () => {
     try {
       setLoading(true);
+      setError(null);
       const [poly, flow] = await Promise.all([
         getPolygonCalls(symbol, 150),
         getUWFlow(symbol)
@@ -63,7 +94,7 @@ export default function App() {
       // Sort by score desc and take top
       setCards(enriched.sort((a,b) => parseFloat(b.score) - parseFloat(a.score)).slice(0, 8));
     } catch (e) {
-      alert(e.message);
+      setError(e.message);
     } finally {
       setLoading(false);
     }
@@ -80,6 +111,13 @@ export default function App() {
           </div>
           <button onClick={fetchData} className="bg-blue-600 px-4 py-2 rounded self-start md:self-auto">Scan Calls</button>
         </div>
+
+        {error && (
+          <div className="bg-red-500/20 border border-red-500/30 p-3 rounded-lg flex items-center justify-between">
+            <span className="text-red-400">{error}</span>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">✕</button>
+          </div>
+        )}
 
         <div>
           <h2 className="font-semibold mb-2">🔥 Top Call Opportunities</h2>
