@@ -10,9 +10,9 @@ import { getPolygonCalls, getUWFlow } from './api/market';
 // Simple scoring: blends IV (lower better), bid/ask spread (tighter better), and flow hits (if available)
 function scoreCall({ iv, bid, ask }, flowHits) {
   const spread = (ask ?? 0) - (bid ?? 0);
-  const ivScore = iv ? Math.max(0, 10 - Math.min(100, iv) / 10) : 7.5; // lower IV => higher score
-  const spreadScore = spread > 0 ? Math.max(0, 10 - spread * 10) : 8;  // tighter spread => higher score
-  const flowScore = Math.min(10, 7 + (flowHits || 0) * 0.6);           // each hit bumps score
+  const ivScore = iv != null ? Math.max(0, 10 - Math.min(100, iv) / 10) : 7.5; // lower IV => higher
+  const spreadScore = spread > 0 ? Math.max(0, 10 - spread * 10) : 8;          // tighter => higher
+  const flowScore = Math.min(10, 7 + (flowHits || 0) * 0.6);                    // each hit bumps score
   const s = (ivScore * 0.4) + (spreadScore * 0.3) + (flowScore * 0.3);
   return s.toFixed(1);
 }
@@ -31,25 +31,44 @@ export default function App() {
     try {
       setLoading(true);
 
-      // 1) Fetch Polygon calls snapshot
+      // --- 1) Polygon data (snapshot preferred, reference fallback handled in mapper below) ---
       const poly = await getPolygonCalls(symbol, 150);
 
-      // Normalize Polygon snapshot results into a flat list
-      const items = (poly?.results || []).map((r) => {
-        const o = r?.details || r;         // contract metadata
-        const greeks = r?.greeks || {};    // greeks (if provided on your plan)
-        const iv = greeks?.iv ?? r?.implied_volatility;
-        const bid = r?.last_quote?.bid ?? r?.day?.bid ?? null;
-        const ask = r?.last_quote?.ask ?? r?.day?.ask ?? null;
-        const strike = o?.strike_price ?? o?.strike ?? r?.strike_price;
-        const exp = o?.expiration_date ?? o?.expiration;
-        return { symbol, strike, expiry: exp, iv, bid, ask };
-      }).filter(x => x.strike && x.expiry);
+      // Normalize Polygon results into a flat list that our UI understands.
+      // If the Netlify function fell back to "reference" mode, poly.mode === 'reference'.
+      let items;
+      if (poly?.mode === 'reference') {
+        // Fallback shape: only contract metadata (strike/expiry); no quotes/iv/greeks
+        items = (poly.results || [])
+          .map((c) => ({
+            symbol,
+            strike: c?.strike_price ?? c?.strike ?? null,
+            expiry: c?.expiration_date ?? c?.expiration ?? null,
+            iv: null,
+            bid: null,
+            ask: null,
+          }))
+          .filter(x => x.strike && x.expiry);
+      } else {
+        // Snapshot shape: richer data (bid/ask/greeks/iv)
+        items = (poly?.results || [])
+          .map((r) => {
+            const o = r?.details || r;         // contract metadata
+            const greeks = r?.greeks || {};    // greeks (if provided on your plan)
+            const iv = greeks?.iv ?? r?.implied_volatility ?? null;
+            const bid = r?.last_quote?.bid ?? r?.day?.bid ?? null;
+            const ask = r?.last_quote?.ask ?? r?.day?.ask ?? null;
+            const strike = o?.strike_price ?? o?.strike ?? r?.strike_price;
+            const exp = o?.expiration_date ?? o?.expiration;
+            return { symbol, strike, expiry: exp, iv, bid, ask };
+          })
+          .filter(x => x.strike && x.expiry);
+      }
 
-      // 2) Try to fetch Unusual Whales flow (non-fatal if missing)
+      // --- 2) Try Unusual Whales (optional; returns empty when UW_API_KEY missing via our helper) ---
       let flows = [];
       try {
-        const flow = await getUWFlow(symbol); // our client helper returns {data: []} when UW_API_KEY is missing
+        const flow = await getUWFlow(symbol); // our client helper can return { data: [] } when key missing
         flows = (flow?.data || flow?.results || []).map((f, i) => ({
           id: i,
           text: f?.text || `${symbol} flow ${f?.type || ''} prem ${f?.premium || ''}`,
@@ -59,7 +78,7 @@ export default function App() {
         if (!flows.length) {
           setFlowNote('Flow disabled — add UW_API_KEY in Netlify to enable Unusual Whales overlays.');
         }
-      } catch (err) {
+      } catch {
         // If any unexpected error, keep going with Polygon-only
         setFlowNote('Flow unavailable right now — showing Polygon data only.');
         flows = [];
@@ -67,10 +86,9 @@ export default function App() {
 
       setFlowFeed(flows.slice(0, 10));
 
-      // 3) Enrich Polygon contracts with basic "flow hits" by checking strike text mentions
+      // --- 3) Enrich with basic "flow hits" by strike proximity or explicit strike from flow ---
       const enriched = items.map(it => {
         const hits = flows.filter(f => {
-          // try exact strike match first, else loose text includes on rounded strike
           if (f.strikeHint) return Number(f.strikeHint) === Math.round(it.strike);
           return f.text?.includes(`${Math.round(it.strike)}`);
         }).length;
@@ -82,7 +100,7 @@ export default function App() {
         };
       });
 
-      // 4) Sort by score and take top N
+      // --- 4) Sort by score and take top N ---
       setCards(enriched.sort((a,b) => parseFloat(b.score) - parseFloat(a.score)).slice(0, 8));
     } catch (e) {
       alert(e.message || 'Scan failed');
@@ -151,7 +169,7 @@ export default function App() {
           )}
         </div>
 
-        {/* Flow Highlights (will be empty until you add UW_API_KEY) */}
+        {/* Flow Highlights (empty until you add UW_API_KEY) */}
         <AlertFeed items={flowFeed} />
         <MarketSentiment />
       </div>
