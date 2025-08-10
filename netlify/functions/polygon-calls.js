@@ -1,45 +1,61 @@
-// /netlify/functions/polygon-quotes.js
-// Fetch last NBBO for a list of option contracts (comma-separated)
+// /netlify/functions/polygon-calls.js (snapshot with fallback to reference)
 export const handler = async (event) => {
   try {
+    const symbol = event.queryStringParameters?.symbol;
+    const limit = event.queryStringParameters?.limit || '200';
     const apiKey = process.env.POLYGON_API_KEY;
+
+    if (!symbol) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Missing ?symbol=' }) };
+    }
     if (!apiKey) {
       return { statusCode: 500, body: JSON.stringify({ error: 'Missing POLYGON_API_KEY env var' }) };
     }
 
-    const list = (event.queryStringParameters?.contracts || '')
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
+    // Try rich snapshot (quotes/iv/greeks)
+    const snapURL = new URL(`https://api.polygon.io/v3/snapshot/options/${encodeURIComponent(symbol.toUpperCase())}`);
+    snapURL.searchParams.set('contract_type', 'call');
+    snapURL.searchParams.set('limit', limit);
+    snapURL.searchParams.set('apiKey', apiKey);
 
-    if (!list.length) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'Missing ?contracts=O:...' }) };
+    const snapRes = await fetch(snapURL.toString());
+    const snapText = await snapRes.text();
+
+    if (snapRes.ok) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: snapText
+      };
     }
 
-    // Do calls in parallel on the server (fewer client roundtrips)
-    const results = await Promise.all(list.map(async (ctr) => {
-      // Polygon Last NBBO for options
-      // https://api.polygon.io/v2/last/nbbo/O:{contract}
-      const url = new URL(`https://api.polygon.io/v2/last/nbbo/${encodeURIComponent(ctr)}`);
-      url.searchParams.set('apiKey', apiKey);
+    // Fallback: reference list (metadata only)
+    const refURL = new URL('https://api.polygon.io/v3/reference/options/contracts');
+    refURL.searchParams.set('underlying_ticker', symbol.toUpperCase());
+    refURL.searchParams.set('contract_type', 'call');
+    refURL.searchParams.set('expired', 'false');
+    refURL.searchParams.set('limit', '200');
+    refURL.searchParams.set('apiKey', apiKey);
 
-      const res = await fetch(url.toString());
-      const text = await res.text();
-      if (!res.ok) {
-        return { contract: ctr, error: text || String(res.status) };
-      }
-      let data;
-      try { data = JSON.parse(text); } catch { data = null; }
-      const bid = data?.results?.bid?.price ?? null;
-      const ask = data?.results?.ask?.price ?? null;
+    const refRes = await fetch(refURL.toString());
+    const refText = await refRes.text();
 
-      return { contract: ctr, bid, ask };
-    }));
+    if (refRes.ok) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({
+          mode: 'reference',
+          status: 'OK',
+          results: JSON.parse(refText)?.results || []
+        })
+      };
+    }
 
     return {
-      statusCode: 200,
+      statusCode: snapRes.status,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ results })
+      body: JSON.stringify({ error: 'Polygon API error', status: snapRes.status, body: snapText })
     };
   } catch (e) {
     return { statusCode: 500, body: JSON.stringify({ error: e.message || String(e) }) };

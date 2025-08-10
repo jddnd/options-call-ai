@@ -1,14 +1,14 @@
-// /netlify/functions/uw-flow.js (patched)
+// /netlify/functions/uw-flow.js (graceful errors)
 export const handler = async (event) => {
   try {
     const symbol = event.queryStringParameters?.symbol;
     const apiKey = process.env.UW_API_KEY;
-    const base = process.env.UW_BASE || 'https://api.unusualwhales.com'; // confirm exact base for your plan
+    const base = process.env.UW_BASE || 'https://api.unusualwhales.com'; // confirm per your plan
 
     if (!symbol) return { statusCode: 400, body: JSON.stringify({ error: 'Missing ?symbol=' }) };
     if (!apiKey) return { statusCode: 500, body: JSON.stringify({ error: 'Missing UW_API_KEY env var' }) };
 
-    // NOTE: Replace '/v1/flow' with the exact endpoint provided by your plan/docs.
+    // Replace path with your plan's endpoint
     const url = new URL(`${base}/v1/flow`);
     url.searchParams.set('symbol', symbol.toUpperCase());
     url.searchParams.set('type', 'call');
